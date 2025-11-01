@@ -1,0 +1,35 @@
+BEARER TOKEN:
+LynixVideoContentGenerate88288
+
+
+CURL IMPORT HTTP NODE N8N:
+curl -X POST "https://159l88z0-8000.asse.devtunnels.ms/render" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer LynixVideoContentGenerate88288" \
+  -d '{
+    "content_url": "https://v45.tiktokcdn-us.com/f95043516b23cdf186cc408bfda36151/6904c5ca/video/tos/alisg/tos-alisg-pve-0037c001/ogSiCEBlIIRUHb1fFf4nJEUWoxTRKBOGyIigAB/?a=0&bti=OUBzOTg7QGo6OjZAL3AjLTAzYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0|0|0|&cv=1&br=1122&bt=561&cs=0&ds=6&ft=aEKfuqT0m0LPD12Rl_as3wUj1B2XMeF~O5&mime_type=video_mp4&qs=0&rc=aGRmZGczNjU8OTVlNTs3OEBpM2x0bHI5cnluNjMzODczNEAvYDQvMDRfXi0xYi9hYmA2YSMuXmZnMmRzYTFhLS1kMTFzcw==&vvpl=1&l=2025103108205060DC000CDF0319007475&btag=e000b5000",
+    "background_option": 1,
+    "header_text": "Contoh Header - Testing",
+    "comments": [
+      {
+        "author": "UserA",
+        "text": "Keren banget kontennya, kasih tipsnya dong!",
+        "likes": 128,
+        "highlight": true
+      },
+      {
+        "author": "UserB",
+        "text": "Wah ini useful, terima kasih sharingnya.",
+        "likes": 42,
+        "highlight": false
+      }
+    ],
+    "use_html_renderer": false,
+    "scale": 1.5,
+    "max_duration": 30
+  }'
+
+
+
+CURL TESTING CMD:
+curl -X POST "https://159l88z0-8000.asse.devtunnels.ms/render" -H "Content-Type: application/json" -H "Authorization: Bearer LynixVideoContentGenerate88288" --data "{\"content_url\":\"https://v16m.tiktokcdn-us.com/c94814b26de713949af6ff2441dabb84/6904b9ae/video/tos/alisg/tos-alisg-pve-0037c001/ogSiCEBlIIRUHb1fFf4nJEUWoxTRKBOGyIigAB/?a=0&bti=OUBzOTg7QGo6OjZAL3AjLTAzYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0|0|0|&cv=1&br=1122&bt=561&cs=0&ds=6&ft=z_ChWPE82m5jVg1tkF7fupNX6pM5S3.qRn67TGbL&mime_type=video_mp4&qs=0&rc=aGRmZGczNjU8OTVlNTs3OEBpM2x0bHI5cnluNjMzODczNEAvYDQvMDRfXi0xYi9hYmA2YSMuXmZnMmRzYTFhLS1kMTFzcw==&vvpl=1&l=202510310729107F05118FB7E9DB082201&btag=e000b0000\",\"background_option\":1,\"header_text\":\"Contoh Header\",\"comments\":[{\"author\":\"UserA\",\"text\":\"Komen pertama\",\"likes\":12,\"highlight\":true},{\"author\":\"UserB\",\"text\":\"Komen dua\",\"likes\":5,\"highlight\":false}],\"use_html_renderer\":false,\"scale\":1.5,\"max_duration\":30}" --output result.mp4 --max-time 600

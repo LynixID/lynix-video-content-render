@@ -1,0 +1,6 @@
+streamlit>=1.0
+Pillow>=8.0
+playwright>=1.40.0
+fastapi>=0.95
+uvicorn[standard]>=0.20
+httpx>=0.24
