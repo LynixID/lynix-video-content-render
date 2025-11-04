@@ -3,6 +3,7 @@ import subprocess
 import os
 from PIL import Image, ImageDraw, ImageFont
 import math
+from io import BytesIO
 try:
     from playwright.sync_api import sync_playwright
     _HAS_PLAYWRIGHT = True
@@ -160,10 +161,128 @@ def make_comment_image(author, text, likes, out_path, width=460, height=220, bg=
     img.save(out_path)
 
 
-def make_comments_image(comments, out_path, width=972, padding=14, bg=(255,255,255,255), scale=1.5):
+def get_emoji_font(size=24):
+    """Try to get a font that supports emoji. Falls back to default if not available."""
+    # Try common emoji-supporting fonts (order matters)
+    emoji_font_paths = [
+        "C:/Windows/Fonts/seguiemj.ttf",  # Windows Segoe UI Emoji
+        "C:/Windows/Fonts/msyh.ttc",      # Windows Microsoft YaHei (supports emoji)
+        "/System/Library/Fonts/Apple Color Emoji.ttc",  # macOS
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",  # Linux Noto Color Emoji
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux DejaVu (partial emoji)
+    ]
+    for font_path in emoji_font_paths:
+        if os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    # Fallback to default font
+    return ImageFont.load_default()
+
+
+def is_emoji(char):
+    """Check if a character is an emoji."""
+    # Simple emoji detection - covers most common emoji ranges
+    code = ord(char)
+    return (
+        (0x1F600 <= code <= 0x1F64F) or  # Emoticons
+        (0x1F300 <= code <= 0x1F5FF) or  # Misc Symbols and Pictographs
+        (0x1F680 <= code <= 0x1F6FF) or  # Transport and Map
+        (0x1F1E0 <= code <= 0x1F1FF) or  # Regional indicators
+        (0x2600 <= code <= 0x26FF) or    # Misc symbols
+        (0x2700 <= code <= 0x27BF) or    # Dingbats
+        (0xFE00 <= code <= 0xFE0F) or    # Variation Selectors
+        (0x1F900 <= code <= 0x1F9FF) or  # Supplemental Symbols
+        (0x1FA00 <= code <= 0x1FAFF)     # Chess Symbols and Extended
+    )
+
+
+def draw_text_with_emoji(draw, position, text, text_font, emoji_font, fill=(0,0,0)):
+    """Draw text with proper emoji rendering using composite font.
+    Uses text_font for regular text and emoji_font for emoji characters.
+    """
+    x, y = position
+    current_x = x
+    
+    # Render character by character or word by word, using appropriate font for each
+    i = 0
+    while i < len(text):
+        char = text[i]
+        
+        # Check if this is an emoji (could be multi-byte)
+        # Handle emoji sequences (some emojis are 2-char sequences)
+        emoji_char = char
+        emoji_len = 1
+        
+        # Check if next character is part of emoji sequence (variation selector, skin tone, etc)
+        if i + 1 < len(text):
+            next_char = text[i + 1]
+            if ord(next_char) in (0xFE00, 0xFE0F) or (0x1F3FB <= ord(next_char) <= 0x1F3FF):
+                emoji_char = char + next_char
+                emoji_len = 2
+        
+        if is_emoji(char):
+            # Render emoji with emoji font
+            try:
+                draw.text((current_x, y), emoji_char, font=emoji_font, fill=fill)
+                # Get width of emoji
+                try:
+                    bbox = draw.textbbox((0, 0), emoji_char, font=emoji_font)
+                    char_width = bbox[2] - bbox[0]
+                except:
+                    try:
+                        char_width = emoji_font.getlength(emoji_char)
+                    except:
+                        char_width = text_font.getlength(emoji_char)
+                current_x += char_width
+                i += emoji_len - 1  # Skip processed characters
+            except Exception:
+                # Fallback to text font if emoji font fails
+                try:
+                    draw.text((current_x, y), emoji_char, font=text_font, fill=fill)
+                    try:
+                        bbox = draw.textbbox((0, 0), emoji_char, font=text_font)
+                        char_width = bbox[2] - bbox[0]
+                    except:
+                        char_width = text_font.getlength(emoji_char)
+                    current_x += char_width
+                    i += emoji_len - 1
+                except:
+                    # Last resort: skip character
+                    i += emoji_len
+        else:
+            # Render regular text with text font
+            # Find the end of the current word/sequence (non-emoji sequence)
+            end = i + 1
+            while end < len(text) and not is_emoji(text[end]):
+                end += 1
+            
+            word = text[i:end]
+            if word:
+                try:
+                    draw.text((current_x, y), word, font=text_font, fill=fill)
+                    try:
+                        bbox = draw.textbbox((0, 0), word, font=text_font)
+                        word_width = bbox[2] - bbox[0]
+                    except:
+                        try:
+                            word_width = text_font.getlength(word)
+                        except:
+                            word_width = len(word) * 10  # Fallback estimate
+                    current_x += word_width
+                except:
+                    pass
+            i = end
+        
+        i += 1
+
+
+def make_comments_image(comments, out_path, width=972, padding=14, bg=(255,255,255,255), scale=1.5, tmpdir=None):
     """Render up to 2 comments in a Twitter-like column style.
-    comments: list of dicts with keys 'author','text','likes'
+    comments: list of dicts with keys 'author','text','likes','avatar_path'
     scale: scale factor to apply to all geometry and typography (1.0 = native, 1.5 = 150%)
+    tmpdir: temporary directory for avatar files (optional)
     """
     s = float(scale)
 
@@ -171,6 +290,9 @@ def make_comments_image(comments, out_path, width=972, padding=14, bg=(255,255,2
     name_fs = max(10, int(28 * s))
     handle_fs = max(8, int(20 * s))
     text_fs = max(10, int(22 * s))
+    
+    # Try to get fonts with emoji support
+    emoji_font = get_emoji_font()
     try:
         name_font = ImageFont.truetype("arialbd.ttf", name_fs)
         handle_font = ImageFont.truetype("arial.ttf", handle_fs)
@@ -198,41 +320,93 @@ def make_comments_image(comments, out_path, width=972, padding=14, bg=(255,255,2
 
     per_comment_heights = []
     wrapped_texts = []
-    per_comment_widths = []
     av_d = int(64 * s)
     likes_space = int(80 * s)  # reserve space on right for likes/heart
-    max_allowed_width = int(width * s)  # treat 'width' as a maximum cap
+    # Lebar maksimal template komentar = 90% dari lebar layar (TARGET_W = 1080px)
+    # width yang dipassing sudah 90% dari TARGET_W (972px)
+    # PENTING: width template TIDAK di-scale, hanya font dan spacing yang di-scale
+    max_allowed_width = int(width)  # FIXED WIDTH - tidak di-scale, tetap 90% dari TARGET_W
     pad = int(padding * s)
     name_text_gap = int(6 * s)
     line_spacing_unit = int(4 * s)
+    
+    # Calculate available width for text (fixed, tidak tergantung panjang teks)
+    # Struktur: pad(kiri) + avatar + pad + text_area + pad + likes_space + pad(kanan) = max_allowed_width
+    # text_area = max_allowed_width - (pad*4 + av_d + likes_space)
+    text_area_width = max_allowed_width - (pad*4 + av_d + likes_space)
 
+    MAX_TEXT_LINES = 3  # Maksimal 3 baris untuk text komentar
+    
     for c in comments[:2]:
         full_text = c.get("text", "")
-        # measure full text without wrapping
-        full_w = text_size_local(full_text, text_font)[0]
-        # available width for text if unwrapped
-        available_if_unwrapped = max_allowed_width - pad*4 - av_d - likes_space
-
+        
+        # Always wrap text to fit within text_area_width
+        # Split text into words and wrap them
         lines = []
-        if full_text and full_w <= available_if_unwrapped:
-            # no wrap needed
-            lines = [full_text]
-            max_line_w = full_w
-        else:
-            # wrap to available width (or to a sane minimum)
-            wrap_width = max(available_if_unwrapped, int(200 * s))
-            words = full_text.split()
+        words = full_text.split() if full_text else []
+        
+        if words:
             cur = ""
             for w in words:
-                test = (cur + " " + w).strip()
-                if text_size_local(test, text_font)[0] <= wrap_width:
+                # Jika sudah mencapai maksimal 3 baris, stop wrapping
+                if len(lines) >= MAX_TEXT_LINES:
+                    break
+                
+                test = (cur + " " + w).strip() if cur else w
+                # Measure text width (try to account for emoji)
+                test_w = text_size_local(test, text_font)[0]
+                # Add some buffer for emoji (they might be wider)
+                if test_w <= text_area_width * 0.95:  # 95% to leave some buffer
                     cur = test
                 else:
-                    lines.append(cur)
-                    cur = w
+                    if cur:
+                        lines.append(cur)
+                        if len(lines) >= MAX_TEXT_LINES:
+                            break
+                    # If single word is too long, split it (for very long words)
+                    if text_size_local(w, text_font)[0] > text_area_width * 0.95:
+                        # Word is too long, try to split it character by character
+                        word_cur = ""
+                        for char in w:
+                            if len(lines) >= MAX_TEXT_LINES:
+                                break
+                            word_test = word_cur + char
+                            if text_size_local(word_test, text_font)[0] <= text_area_width * 0.95:
+                                word_cur = word_test
+                            else:
+                                if word_cur:
+                                    lines.append(word_cur)
+                                    if len(lines) >= MAX_TEXT_LINES:
+                                        break
+                                word_cur = char
+                        cur = word_cur
+                        if len(lines) >= MAX_TEXT_LINES:
+                            break
+                    else:
+                        cur = w
+            
+            # Add current line if we haven't reached max lines
             if cur:
-                lines.append(cur)
-            max_line_w = max((text_size_local(l, text_font)[0] for l in lines), default=0)
+                if len(lines) < MAX_TEXT_LINES:
+                    # Masih ada slot, tambahkan baris baru
+                    lines.append(cur)
+                elif len(lines) == MAX_TEXT_LINES:
+                    # Sudah mencapai max, append ke baris terakhir dengan ellipsis jika perlu
+                    # Tapi jika cur terlalu panjang, kita skip saja (tidak perlu ellipsis di baris terakhir)
+                    # Atau kita bisa tambahkan ellipsis ke baris terakhir yang sudah ada
+                    last_line = lines[-1] if lines else ""
+                    # Cek apakah baris terakhir perlu ellipsis
+                    if last_line and not last_line.endswith("..."):
+                        # Tambahkan ellipsis ke baris terakhir jika masih ada space
+                        ellipsis = "..."
+                        test_line = last_line + ellipsis
+                        if text_size_local(test_line, text_font)[0] <= text_area_width * 0.95:
+                            lines[-1] = test_line
+        else:
+            lines = [""]
+        
+        # Pastikan maksimal 3 baris (safety check)
+        lines = lines[:MAX_TEXT_LINES]
 
         wrapped_texts.append(lines)
         header_h = text_size_local(c.get("author",""), name_font)[1]
@@ -242,13 +416,8 @@ def make_comments_image(comments, out_path, width=972, padding=14, bg=(255,255,2
             comment_h = int(100 * s)
         per_comment_heights.append(comment_h)
 
-        comment_total_w = pad*3 + av_d + max_line_w + likes_space
-        per_comment_widths.append(int(comment_total_w))
-
-    # decide final image width based on widest comment, but cap to provided width
-    img_width = int(min(max(per_comment_widths) if per_comment_widths else max_allowed_width, max_allowed_width))
-    if img_width < int(300 * s):
-        img_width = int(300 * s)
+    # Image width selalu sama dengan max_allowed_width (FIXED WIDTH)
+    img_width = max_allowed_width
 
     total_h = sum(per_comment_heights) + (len(per_comment_heights)-1)*int(8 * s) + pad*2
     img = Image.new("RGBA", (img_width, total_h), bg)
@@ -260,22 +429,53 @@ def make_comments_image(comments, out_path, width=972, padding=14, bg=(255,255,2
         av_x = pad
         av_y = y
         # av_d already scaled above
-        # avatar background / placeholder
+        
+        # Load avatar image if provided
+        avatar_img = None
+        avatar_path = c.get("avatar_path")
+        if avatar_path and os.path.exists(avatar_path):
+            try:
+                avatar_img = Image.open(avatar_path)
+                # Convert to RGBA if needed
+                if avatar_img.mode != "RGBA":
+                    avatar_img = avatar_img.convert("RGBA")
+                # Resize to square
+                avatar_img = avatar_img.resize((av_d, av_d), Image.LANCZOS)
+            except Exception as e:
+                print(f"Warning: Gagal load avatar: {e}")
+                avatar_img = None
+        
+        # Draw avatar background / placeholder
         draw.ellipse((av_x, av_y, av_x+av_d, av_y+av_d), fill=(230,230,230))
+        
+        # Draw avatar image if available (create circular mask)
+        if avatar_img:
+            # Create circular mask
+            mask = Image.new("L", (av_d, av_d), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, av_d, av_d), fill=255)
+            # Apply mask to avatar
+            avatar_img.putalpha(mask)
+            # Paste avatar onto main image
+            img.paste(avatar_img, (av_x, av_y), avatar_img)
+        
         # if highlighted (like second comment), draw border
         if c.get("highlight"):
             draw.ellipse((av_x-int(3*s), av_y-int(3*s), av_x+av_d+int(3*s), av_y+av_d+int(3*s)), outline=(14,165,233), width=max(1,int(4*s)))
+        
         # author name
         name_x = av_x + av_d + int(12 * s)
         name_y = y
         draw.text((name_x, name_y), c.get("author",""), font=name_font, fill=(0,0,0))
         name_h = text_size_local(c.get("author",""), name_font)[1]
 
-        # comment text (increased gap after name and line spacing)
+        # comment text (increased gap after name and line spacing) with emoji support
         tx = name_x
         ty = name_y + name_h + int(12 * s)
+        emoji_font_scaled = get_emoji_font(int(22 * s))  # Match text font size
         for line in wrapped_texts[idx]:
-            draw.text((tx, ty), line, font=text_font, fill=(20,20,20))
+            # Render text with proper emoji support
+            draw_text_with_emoji(draw, (tx, ty), line, text_font, emoji_font_scaled, fill=(20,20,20))
             ty += text_size_local(line, text_font)[1] + int(8 * s)
 
         # bottom row: show only likes (heart + count) aligned to the right
@@ -321,16 +521,18 @@ def make_comments_image_html(comments, out_path, width=972, scale=1.5):
         # fallback (pass scale to PIL renderer)
         return make_comments_image(comments, out_path, width=width, scale=scale)
 
-        # build HTML using the provided template structure
-        # simple inline Tailwind from CDN is used
-        html_comments = ""
-        for idx, c in enumerate(comments[:2]):
-                border = "border-b border-gray-100" if idx == 0 else ""
-                highlight_border = "border-2 border-sky-400" if c.get("highlight") else ""
-                html_comments += f'''
+    # build HTML using the provided template structure
+    # simple inline Tailwind from CDN is used
+    html_comments = ""
+    for idx, c in enumerate(comments[:2]):
+        border = "border-b border-gray-100" if idx == 0 else ""
+        highlight_border = "border-2 border-sky-400" if c.get("highlight") else ""
+        # Use avatar_url if provided, otherwise use placeholder
+        avatar_src = c.get("avatar_url") or "https://via.placeholder.com/40"
+        html_comments += f'''
         <div class="p-4 {border}">
             <div class="flex items-start space-x-3">
-                <img src="https://via.placeholder.com/40" class="w-10 h-10 rounded-full {highlight_border}" alt="profile">
+                <img src="{avatar_src}" class="w-10 h-10 rounded-full {highlight_border}" alt="profile" onerror="this.src='https://via.placeholder.com/40'">
                 <div class="flex-1">
                     <div class="font-semibold text-sm">{c.get('author','')}</div>
                     <div class="text-[15px] leading-snug mt-0.5 {'font-semibold' if c.get('highlight') else ''}">{c.get('text','')}</div>

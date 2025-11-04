@@ -36,6 +36,7 @@ class Comment(BaseModel):
     time: Optional[str] = ""
     replies: Optional[str] = ""
     highlight: Optional[bool] = False
+    avatar_url: Optional[str] = None
 
 
 class RenderRequest(BaseModel):
@@ -80,6 +81,34 @@ def download_file(url: str, dst_path: str, max_bytes: int = 150 * 1024 * 1024, t
         raise HTTPException(status_code=502, detail=f"Gagal mendownload file: {e}")
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Gagal menghubungi URL: {e}")
+
+
+def download_avatar(url: str, dst_path: str, max_bytes: int = 5 * 1024 * 1024, timeout: int = 30):
+    """Download avatar image from URL. Smaller size limit than video files."""
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            with client.stream("GET", url) as r:
+                r.raise_for_status()
+                # Check content type
+                content_type = r.headers.get("content-type", "").lower()
+                if not any(ct in content_type for ct in ["image/jpeg", "image/jpg", "image/png", "image/webp"]):
+                    print(f"Warning: Avatar URL mungkin bukan gambar: {content_type}")
+                total = 0
+                with open(dst_path, "wb") as fh:
+                    for chunk in r.iter_bytes(chunk_size=8192):
+                        if not chunk:
+                            continue
+                        fh.write(chunk)
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise HTTPException(status_code=413, detail="Avatar terlalu besar")
+                return True
+    except httpx.HTTPStatusError as e:
+        print(f"Warning: Gagal download avatar: {e}")
+        return False
+    except httpx.RequestError as e:
+        print(f"Warning: Gagal menghubungi avatar URL: {e}")
+        return False
 
 
 def has_video_stream(path: str):
@@ -165,17 +194,30 @@ def render(request: Request, req: RenderRequest, background_tasks: BackgroundTas
             header_path = os.path.join(tmpdir, "header.png")
             make_header_image(req.header_text or "", header_path, width=TARGET_W, height=160)
 
-            comment_img_path = os.path.join(tmpdir, "comments.png")
+            # download avatars for comments if provided
             comments_list = [c.dict() for c in (req.comments or [])][:2]
+            for idx, comment in enumerate(comments_list):
+                if comment.get("avatar_url"):
+                    avatar_path = os.path.join(tmpdir, f"avatar_{idx}.jpg")
+                    if download_avatar(comment["avatar_url"], avatar_path):
+                        comment["avatar_path"] = avatar_path
+                    else:
+                        comment["avatar_path"] = None
+                else:
+                    comment["avatar_path"] = None
+
+            comment_img_path = os.path.join(tmpdir, "comments.png")
+            # Lebar template komentar maksimal 90% dari lebar layar (TARGET_W)
+            comment_width = int(TARGET_W * 0.90)
             # prefer HTML renderer if requested and available
             if req.use_html_renderer:
                 try:
-                    make_comments_image_html(comments_list, comment_img_path, width=CONTENT_W, scale=req.scale)
+                    make_comments_image_html(comments_list, comment_img_path, width=comment_width, scale=req.scale)
                 except Exception:
                     # fallback to PIL renderer
-                    make_comments_image(comments_list, comment_img_path, width=CONTENT_W, scale=req.scale)
+                    make_comments_image(comments_list, comment_img_path, width=comment_width, scale=req.scale, tmpdir=tmpdir)
             else:
-                make_comments_image(comments_list, comment_img_path, width=CONTENT_W, scale=req.scale)
+                make_comments_image(comments_list, comment_img_path, width=comment_width, scale=req.scale, tmpdir=tmpdir)
 
             # pick background asset: try multiple extensions so users can drop a video (mp4/webm/mov) or image
             bg_path = None
