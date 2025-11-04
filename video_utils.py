@@ -50,10 +50,10 @@ def make_header_image(text, out_path, width=1080, height=160, bg_color=(245, 237
     # choose font (try bold then regular)
     try:
         # try bold Windows font first
-        font = ImageFont.truetype("arialbd.ttf", 56)
+        font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "arialbd.ttf"), 56)
     except Exception:
         try:
-            font = ImageFont.truetype("arial.ttf", 56)
+            font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "arial.ttf"), 56)
         except Exception:
             font = ImageFont.load_default()
 
@@ -109,8 +109,8 @@ def make_comment_image(author, text, likes, out_path, width=460, height=220, bg=
     round_rect(draw, (0, 0, width, height), radius=16, fill=bg)
 
     try:
-           name_font = ImageFont.truetype("arialbd.ttf", 28)
-           text_font = ImageFont.truetype("arial.ttf", 22)
+           name_font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "arialbd.ttf"), 28)
+           text_font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "arial.ttf"), 22)
     except Exception:
         name_font = ImageFont.load_default()
         text_font = ImageFont.load_default()
